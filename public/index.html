@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10121a">
+  <meta name="description" content="enthstudio — không gian làm việc của đội AI phát triển game.">
+  <title>enthstudio — AI game studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css?v=13">
+  <script src="/app.js?v=15" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="icon-rail" aria-label="Không gian làm việc">
+      <div class="brand-mark" title="enthstudio">e<span>.</span></div>
+      <div class="rail-divider"></div>
+      <button class="rail-button selected" aria-label="Studio" title="Studio">✦</button>
+      <div class="rail-bottom"><span class="rail-avatar">B</span></div>
+    </aside>
+
+    <aside class="sidebar">
+      <div class="workspace-title"><div><small>WORKSPACE</small><strong>enthstudio</strong></div><span class="workspace-chevron">⌄</span></div>
+      <div class="sidebar-scroll">
+        <div class="section-label">KÊNH TRÒ CHUYỆN</div>
+        <nav id="channel-list" class="nav-list" aria-label="Kênh"></nav>
+        <div class="section-label with-top">QUẢN LÝ</div>
+        <nav class="nav-list" aria-label="Quản lý">
+          <button class="nav-item" data-view="tasks"><span class="nav-symbol">▦</span> Công việc <span id="task-count" class="count-badge">0</span></button>
+          <button class="nav-item" data-view="runs"><span class="nav-symbol">◷</span> Lượt chạy</button>
+          <button class="nav-item" data-view="agents"><span class="nav-symbol">◎</span> Agents</button>
+          <button class="nav-item" data-view="documents"><span class="nav-symbol">▤</span> Tài liệu</button>
+          <button class="nav-item" data-view="artifacts"><span class="nav-symbol">⌁</span> Agent memories</button>
+          <button class="nav-item" data-view="git"><span class="nav-symbol">⌘</span> Git diff</button>
+          <button class="nav-item" data-view="previews"><span class="nav-symbol">◉</span> Previews</button>
+          <button class="nav-item" data-view="settings"><span class="nav-symbol">⚙</span> Settings</button>
+        </nav>
+        <div class="sidebar-tip"><div class="tip-icon">↗</div><strong>Giao việc ngay trong chat</strong><p>Gọi <code>@developer</code> hoặc một agent khác. Tin nhắn không gắn tên sẽ đến Lead.</p></div>
+      </div>
+      <div class="sidebar-user"><span class="user-avatar">B</span><div><strong>Bạn</strong><small>Creative Director</small></div><span class="user-online"></span></div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar"><div class="topbar-title"><span id="view-glyph">#</span><strong id="view-title">general</strong><span id="view-description">Thảo luận chung</span></div><div class="topbar-actions"><select id="mobile-nav" aria-label="Chọn trang"><option value="general"># general</option></select><span id="auth-pill" class="auth-pill unknown"><i></i><span>Đang kiểm tra Codex</span></span><button id="refresh-button" class="icon-button" aria-label="Làm mới" title="Làm mới">↻</button></div></header>
+      <div id="content" class="content"></div>
+      <form id="composer" class="composer-wrap"><div id="mention-suggestions" class="mention-suggestions" role="listbox" aria-label="Gợi ý agent" hidden></div><div class="composer"><textarea id="message-input" rows="1" placeholder="Nhắn #general · @agent để giao việc" aria-label="Nội dung tin nhắn" autocomplete="off"></textarea><button id="send-button" type="submit" aria-label="Gửi tin nhắn">➤</button></div><div class="composer-hint"><span>Enter để gửi · Shift + Enter để xuống dòng</span><span id="send-state"></span></div></form>
+    </main>
+
+    <aside class="member-panel"><div class="member-heading">ĐỘI NGŨ <span id="member-count">6</span></div><div id="member-list"></div><div class="member-note"><span class="note-dot"></span><span>Agent chỉ chạy khi có nhiệm vụ. Mặc định mỗi lần một agent.</span></div></aside>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

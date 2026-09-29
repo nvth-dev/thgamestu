@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: enthstudio
+      POSTGRES_USER: enthstudio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enthstudio-local}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enthstudio -d enthstudio"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+  web:
+    build: .
+    command: ["node", "src/web.js"]
+    environment:
+      DATABASE_URL: postgres://enthstudio:${POSTGRES_PASSWORD:-enthstudio-local}@postgres:5432/enthstudio
+      TUNNEL_MANAGER_URL: http://tunnel-manager:3002
+      PORT: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./game-workspace:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tunnel-manager:
+        condition: service_started
+    networks: [backend]
+  worker:
+    build: .
+    command: ["node", "src/worker.js"]
+    environment:
+      DATABASE_URL: postgres://enthstudio:${POSTGRES_PASSWORD:-enthstudio-local}@postgres:5432/enthstudio
+      RUNTIME_URL: http://runtime:3001
+      MAX_ACTIVE_RUNS: ${MAX_ACTIVE_RUNS:-1}
+      ENTHSTUDIO_WORKFLOW_MODE: ${ENTHSTUDIO_WORKFLOW_MODE:-serious}
+    volumes:
+      - ./game-workspace:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      runtime:
+        condition: service_started
+    networks: [backend, execution]
+  runtime:
+    build: .
+    command: ["node", "/app/src/runtime.js"]
+    environment:
+      CODEX_HOME: /codex-state
+      HOME: /codex-state
+      RUNTIME_PORT: 3001
+      RUNTIME_RUN_TIMEOUT_MS: ${RUNTIME_RUN_TIMEOUT_MS:-300000}
+    volumes:
+      - codex-state:/codex-state
+      - ./game-workspace:/workspace
+    working_dir: /workspace
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    networks: [execution]
+  preview-manager:
+    build: .
+    command: ["node", "/app/src/preview-manager.js"]
+    environment:
+      PREVIEW_IMAGE: ${PREVIEW_IMAGE:-project_h-preview-manager}
+    volumes:
+      - ./game-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+  tunnel-manager:
+    build: .
+    command: ["node", "/app/src/tunnel-manager.js"]
+    environment:
+      TUNNEL_PORT: 3002
+    volumes:
+      - ./game-workspace:/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    networks: [backend]
+volumes:
+  postgres-data:
+  codex-state:
+networks:
+  backend:
+  execution:

@@ -1,0 +1,14 @@
+{
+  "name": "enthstudio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web": "node src/web.js",
+    "worker": "node src/worker.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

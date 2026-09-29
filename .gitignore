@@ -1,0 +1,6 @@
+node_modules/
+.env
+game-workspace/*
+!game-workspace/agent_memories/
+!game-workspace/agent_memories/**
+*.log

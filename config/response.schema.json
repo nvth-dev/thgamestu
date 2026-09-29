@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reply", "handoff", "vote", "memory"],
+  "properties": {
+    "reply": {"type": "string"},
+    "handoff": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "task"],
+          "properties": {
+            "agent": {"type": "string", "enum": ["lead", "designer", "architect", "developer", "reviewer", "art-ux"]},
+            "task": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "vote": {"type": "string", "enum": ["none", "approve", "request_changes", "abstain"]},
+    "memory": {"type": "string", "maxLength": 1200}
+  }
+}
