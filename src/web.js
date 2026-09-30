@@ -12,6 +12,70 @@ const port = Number(process.env.PORT || 3000);
 const execFileAsync = promisify(execFile);
 const tunnelManagerUrl = process.env.TUNNEL_MANAGER_URL || 'http://tunnel-manager:3002';
 
+// The channel tabs are lightweight views over the shared task conversation.
+// Project work starts in #general, so role channels need a projection instead
+// of waiting for users to manually duplicate every message into another tab.
+const channelProjections = Object.freeze({
+  gameplay: "m.agent_id = 'designer'",
+  engineering: "m.agent_id IN ('architect', 'developer')",
+  'art-ux': "m.agent_id = 'art-ux'",
+  qa: "m.agent_id = 'reviewer'",
+  decisions: "m.agent_id = 'lead' OR m.vote <> 'none'"
+});
+
+function planDecision(text) {
+  const value = String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  if (/(?:duyet|approve|dong y|chap nhan|bat dau trien khai|trien khai)\s*(?:plan|ke hoach)?$/.test(value)
+    || /(?:duyet|approve)\s+(?:plan|ke hoach)/.test(value)) return 'approve';
+  if (/(?:sua|chinh|request changes|can sua|chua duyet|feedback).*(?:plan|ke hoach)|(?:plan|ke hoach).*(?:sua|chinh)/.test(value)) return 'changes';
+  return null;
+}
+
+function planReport(rows) {
+  return rows.map(row => `### ${row.name}\n${String(row.result || 'Chưa có báo cáo').slice(0, 4500)}`).join('\n\n');
+}
+
+async function applyPlanDecision(client, { channel, task, text, decision }) {
+  const userMessage = (await client.query(
+    'INSERT INTO messages(channel_id,task_id,author,body) VALUES($1,$2,$3,$4) RETURNING *',
+    [channel, task.id, 'Bạn', text]
+  )).rows[0];
+  const planJob = (await client.query(
+    `SELECT id,depth FROM jobs WHERE task_id=$1 AND workflow_stage='plan_review' AND status='completed' ORDER BY id DESC LIMIT 1`,
+    [task.id]
+  )).rows[0];
+  if (!planJob) throw new Error('Chưa có plan hoàn tất để review');
+  const reports = (await client.query(
+    `SELECT a.name,j.result FROM jobs j JOIN agents a ON a.id=j.agent_id
+     WHERE j.task_id=$1 AND j.workflow_stage IN ('design','plan_review') AND j.status='completed' ORDER BY j.id`,
+    [task.id]
+  )).rows;
+  const original = (await client.query(
+    `SELECT prompt FROM jobs WHERE task_id=$1 AND parent_job_id IS NULL ORDER BY id LIMIT 1`,
+    [task.id]
+  )).rows[0]?.prompt || task.title;
+  if (decision === 'approve') {
+    const developer = await client.query("SELECT id FROM agents WHERE id='developer' AND enabled=true");
+    if (!developer.rowCount) throw new Error('Developer đang tạm ngưng');
+    const prompt = `Triển khai dự án theo kế hoạch đã được người dùng duyệt.\n\nYêu cầu gốc: ${original}\n\nKế hoạch và các ý kiến độc lập:\n${planReport(reports)}\n\nHợp nhất các quyết định, chỉ chọn giải pháp có lý do và ghi rõ phần không áp dụng. Tạo hoặc sửa project trong workspace, nếu là web project thì giữ manifest enthstudio.project.json có taskId ${task.id}; chạy kiểm tra phù hợp và báo cáo file đã đổi cùng bằng chứng.`;
+    await client.query(`INSERT INTO jobs(task_id,channel_id,agent_id,prompt,depth,parent_job_id,return_chain,handoff_count,workflow_stage)
+      VALUES($1,$2,'developer',$3,$4,$5,'[]'::jsonb,0,'implementation')`, [task.id, channel, prompt, Number(planJob.depth || 0) + 1, planJob.id]);
+    await client.query("UPDATE tasks SET status='queued',plan_status='approved',updated_at=now() WHERE id=$1", [task.id]);
+    await client.query(`INSERT INTO messages(channel_id,task_id,author,kind,body) VALUES($1,$2,'enthstudio','system',$3)`,
+      [channel, task.id, 'Bạn đã duyệt plan; giao Developer triển khai.']);
+  } else {
+    const lead = await client.query("SELECT id FROM agents WHERE id='lead' AND enabled=true");
+    if (!lead.rowCount) throw new Error('Lead đang tạm ngưng');
+    const prompt = `Người dùng yêu cầu sửa plan trước khi triển khai.\n\nYêu cầu gốc: ${original}\n\nPlan và các ý kiến hiện tại:\n${planReport(reports)}\n\nPhản hồi của người dùng:\n${text}\n\nCập nhật plan cụ thể, chỉ rõ thay đổi, lý do, trade-off và tiêu chí nghiệm thu. Không giao Developer; kết thúc bằng plan mới chờ người dùng review lại.`;
+    await client.query(`INSERT INTO jobs(task_id,channel_id,agent_id,prompt,depth,parent_job_id,return_chain,handoff_count,workflow_stage)
+      VALUES($1,$2,'lead',$3,$4,$5,'[]'::jsonb,0,'plan_review')`, [task.id, channel, prompt, Number(planJob.depth || 0) + 1, planJob.id]);
+    await client.query("UPDATE tasks SET status='queued',plan_status='planning',updated_at=now() WHERE id=$1", [task.id]);
+    await client.query(`INSERT INTO messages(channel_id,task_id,author,kind,body) VALUES($1,$2,'enthstudio','system',$3)`,
+      [channel, task.id, 'Đã nhận yêu cầu sửa plan; Lead sẽ cập nhật kế hoạch trước khi triển khai.']);
+  }
+  return userMessage;
+}
+
 function json(res, code, data) {
   const body = JSON.stringify(data);
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' });
@@ -277,7 +341,11 @@ async function api(req, res, url) {
       one("SELECT value,updated_at FROM settings WHERE key='workflow_policy'")
     ]);
     let workflowPolicy = DEFAULT_WORKFLOW_POLICY;
-    try { if (workflow?.value) workflowPolicy = { ...DEFAULT_WORKFLOW_POLICY, ...JSON.parse(workflow.value) }; } catch { /* Use the source default if a legacy value is malformed. */ }
+    try {
+      if (workflow?.value) workflowPolicy = { ...DEFAULT_WORKFLOW_POLICY, ...JSON.parse(workflow.value) };
+      if (!Array.isArray(workflowPolicy.sequence) || !workflowPolicy.sequence.includes('plan_review')) workflowPolicy = { ...workflowPolicy, sequence: [...DEFAULT_WORKFLOW_POLICY.sequence] };
+      if (workflowPolicy.requireUserPlanApproval !== true) workflowPolicy = { ...workflowPolicy, requireUserPlanApproval: true };
+    } catch { /* Use the source default if a legacy value is malformed. */ }
     return json(res, 200, { channels, agents, tasks, auth: status || { value: 'unknown' }, workflowPolicy });
   }
   if (req.method === 'GET' && url.pathname === '/api/messages') {
@@ -288,7 +356,12 @@ async function api(req, res, url) {
     if (taskId && !/^\d+$/.test(taskId)) return json(res, 400, { error: 'Task ID không hợp lệ' });
     const rows = taskId
       ? await all('SELECT * FROM messages WHERE task_id=$1 AND id>$2 ORDER BY id DESC LIMIT 200', [taskId, after])
-      : await all('SELECT * FROM messages WHERE channel_id=$1 AND id>$2 ORDER BY id DESC LIMIT 200', [channel, after]);
+      : await all(
+        channelProjections[channel]
+          ? `SELECT m.* FROM messages m WHERE (m.channel_id=$1 OR ${channelProjections[channel]}) AND m.id>$2 ORDER BY m.id DESC LIMIT 200`
+          : 'SELECT * FROM messages WHERE channel_id=$1 AND id>$2 ORDER BY id DESC LIMIT 200',
+        [channel, after]
+      );
     rows.reverse();
     return json(res, 200, { messages: rows });
   }
@@ -301,6 +374,8 @@ async function api(req, res, url) {
     const channel = String(input.channel || 'general');
     const text = String(input.body || '').trim();
     const taskId = input.taskId ? String(input.taskId) : null;
+    const planChoice = planDecision(text);
+    const taskHint = taskId || text.match(/\btask\s*#?\s*(\d+)\b/i)?.[1] || null;
     if (!text || text.length > 10_000) return json(res, 400, { error: 'Nội dung phải có từ 1 đến 10.000 ký tự' });
     if (taskId && !/^\d+$/.test(taskId)) return json(res, 400, { error: 'Task ID không hợp lệ' });
     if (isQuickTunnelCommand(text, taskId)) {
@@ -315,8 +390,34 @@ async function api(req, res, url) {
       await client.query('BEGIN');
       const exists = await client.query('SELECT id FROM channels WHERE id=$1', [channel]);
       if (!exists.rowCount) throw new Error('Kênh không tồn tại');
-      const existingTask = taskId ? (await client.query('SELECT * FROM tasks WHERE id=$1 AND channel_id=$2 FOR UPDATE', [taskId, channel])).rows[0] : null;
+      let existingTask = taskId ? (await client.query('SELECT * FROM tasks WHERE id=$1 AND channel_id=$2 FOR UPDATE', [taskId, channel])).rows[0] : null;
+      if (!existingTask && planChoice) {
+        const candidates = taskHint
+          ? (await client.query("SELECT * FROM tasks WHERE id=$1 AND plan_status='awaiting_review' FOR UPDATE", [taskHint])).rows
+          : (await client.query("SELECT * FROM tasks WHERE plan_status='awaiting_review' ORDER BY updated_at DESC FOR UPDATE")).rows;
+        if (candidates.length > 1) throw new Error('Có nhiều task đang chờ duyệt plan; hãy nêu rõ task #.');
+        existingTask = candidates[0] || null;
+      }
       if (taskId && !existingTask) throw new Error('Task không tồn tại trong kênh này');
+      const decision = existingTask ? planChoice : null;
+      if (planChoice && !existingTask) throw new Error('Không tìm thấy task đang chờ duyệt plan; hãy nêu rõ task #.');
+      if (decision && existingTask.plan_status !== 'awaiting_review') throw new Error('Task hiện không ở bước chờ duyệt plan');
+      if (existingTask?.plan_status === 'awaiting_review') {
+        if (decision) {
+          const message = await applyPlanDecision(client, { channel: existingTask.channel_id || channel, task: existingTask, text, decision });
+          await client.query('COMMIT');
+          return json(res, 201, { message, task: { ...existingTask, status: decision === 'approve' ? 'queued' : 'queued', plan_status: decision === 'approve' ? 'approved' : 'planning' } });
+        }
+        const message = (await client.query(
+          'INSERT INTO messages(channel_id,task_id,author,body) VALUES($1,$2,$3,$4) RETURNING *',
+          [existingTask.channel_id || channel, existingTask.id, 'Bạn', text]
+        )).rows[0];
+        await client.query(`INSERT INTO messages(channel_id,task_id,author,kind,body) VALUES($1,$2,'enthstudio','system',$3)`,
+          [existingTask.channel_id || channel, existingTask.id, 'Task đang chờ bạn review plan. Gửi \`@lead duyệt plan\` để triển khai hoặc \`@lead sửa plan: ...\` để yêu cầu chỉnh sửa.']);
+        await client.query('UPDATE tasks SET updated_at=now() WHERE id=$1', [existingTask.id]);
+        await client.query('COMMIT');
+        return json(res, 201, { message, task: existingTask, awaitingPlanReview: true });
+      }
       const requestedAgent = firstMention(text);
       const seriousProject = isSeriousProjectRequest(text, { existingTask: Boolean(existingTask) });
       const lastAgent = existingTask && !/@(?:lead|designer|architect|developer|reviewer|art-ux)\b/i.test(text)
@@ -324,7 +425,7 @@ async function api(req, res, url) {
       const agent = seriousProject ? 'lead' : (lastAgent || requestedAgent);
       const active = await client.query('SELECT id FROM agents WHERE id=$1 AND enabled=true', [agent]);
       if (!active.rowCount) throw new Error('Agent đang tạm ngưng');
-      const task = existingTask || (await client.query('INSERT INTO tasks(title,channel_id) VALUES($1,$2) RETURNING *', [text.slice(0, 100), channel])).rows[0];
+      const task = existingTask || (await client.query('INSERT INTO tasks(title,channel_id,plan_status) VALUES($1,$2,$3) RETURNING *', [text.slice(0, 100), channel, seriousProject ? 'planning' : 'not_required'])).rows[0];
       const message = (await client.query('INSERT INTO messages(channel_id,task_id,author,body) VALUES($1,$2,$3,$4) RETURNING *', [channel, task.id, 'Bạn', text])).rows[0];
       const prompt = seriousProject && requestedAgent !== 'lead'
         ? `${text}\n\n[System] Đây là project work nên phải mở serious pipeline. @${requestedAgent} là góc nhìn người dùng yêu cầu; Lead vẫn phải gọi Designer, Architect và Art / UX độc lập trước Developer.`

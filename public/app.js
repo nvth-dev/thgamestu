@@ -263,6 +263,17 @@ function renderChat() {
     intro.append(back);
   }
   wrap.append(intro);
+  if (task?.plan_status === 'awaiting_review') {
+    const gate = element('section', 'plan-review-gate');
+    gate.append(element('strong', '', 'Plan đang chờ bạn review'));
+    gate.append(element('p', '', 'Đọc ý kiến Designer, Architect và Art / UX ở các kênh chuyên môn hoặc ngay trong task này. Developer chưa được giao cho tới khi bạn duyệt plan.'));
+    const actions = element('div', 'plan-review-actions');
+    const approve = element('button', 'small-button', 'Duyệt plan và triển khai');
+    approve.addEventListener('click', () => { input.value = '@lead duyệt plan'; input.focus(); });
+    const changes = element('button', 'small-button secondary', 'Yêu cầu sửa plan');
+    changes.addEventListener('click', () => { input.value = '@lead sửa plan: '; input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+    actions.append(approve, changes); gate.append(actions); wrap.append(gate);
+  }
   if (!state.messages.length) wrap.append(element('div', 'empty-chat', 'Chưa có tin nhắn. Bắt đầu bằng một yêu cầu hoặc gọi trực tiếp một agent.'));
   for (const message of state.messages) {
     const agent = state.agents.find(item => item.id === message.agent_id);
@@ -283,7 +294,7 @@ function renderChat() {
   content.scrollTop = content.scrollHeight;
 }
 
-const statusNames = { queued:'Đang chờ', running:'Đang chạy', completed:'Hoàn thành', failed:'Lỗi', interrupted:'Gián đoạn', cancelled:'Đã dừng', cancelling:'Đang dừng', rate_limited:'Hết hạn mức', waiting_limit:'Chờ hạn mức' };
+const statusNames = { queued:'Đang chờ', running:'Đang chạy', awaiting_review:'Chờ bạn duyệt plan', completed:'Hoàn thành', failed:'Lỗi', interrupted:'Gián đoạn', cancelled:'Đã dừng', cancelling:'Đang dừng', rate_limited:'Hết hạn mức', waiting_limit:'Chờ hạn mức' };
 function viewFrame(eyebrow, title, subtitle) {
   const wrap = element('div', 'view-pad management-view');
   const intro = element('div', 'view-intro');
@@ -296,7 +307,7 @@ function viewFrame(eyebrow, title, subtitle) {
 }
 
 function renderTasks() {
-  const activeStatuses = new Set(['queued','running','cancelling','interrupted','rate_limited','waiting_limit']);
+  const activeStatuses = new Set(['queued','running','awaiting_review','cancelling','interrupted','rate_limited','waiting_limit']);
   const active = state.tasks.filter(task => activeStatuses.has(task.status));
   const history = state.tasks.filter(task => !activeStatuses.has(task.status));
   const visible = state.taskFilter === 'history' ? history : active;
@@ -720,6 +731,8 @@ async function refreshBootstrap() {
     setView('general');
   } else if (state.view === 'tasks') {
     renderTasks();
+  } else if (isChat()) {
+    renderChat();
   }
 }
 

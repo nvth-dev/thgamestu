@@ -36,7 +36,7 @@ export async function initDb() {
       );
       CREATE TABLE IF NOT EXISTS tasks (
         id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id),
-        status TEXT NOT NULL DEFAULT 'queued', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        status TEXT NOT NULL DEFAULT 'queued', plan_status TEXT NOT NULL DEFAULT 'not_required', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE TABLE IF NOT EXISTS messages (
@@ -75,6 +75,7 @@ export async function initDb() {
       CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
     `);
     await client.query("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS return_chain JSONB NOT NULL DEFAULT '[]'::jsonb");
+    await client.query("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_status TEXT NOT NULL DEFAULT 'not_required'");
     await client.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS handoff_count INTEGER NOT NULL DEFAULT 0');
     await client.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS idle_ms BIGINT');
     await client.query('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS wake_ms INTEGER');

@@ -3,8 +3,9 @@ export const DESIGN_ROLES = Object.freeze(['designer', 'architect', 'art-ux']);
 export const DEFAULT_WORKFLOW_POLICY = Object.freeze({
   mode: 'serious',
   designRoles: [...DESIGN_ROLES],
-  sequence: ['design', 'implementation', 'review', 'final'],
+  sequence: ['design', 'plan_review', 'implementation', 'review', 'final'],
   requireIndependentDesign: true,
+  requireUserPlanApproval: true,
   requireReviewerApproval: true,
   requireRuntimeEvidenceForProjects: true,
   maxReviewRounds: 3

@@ -165,6 +165,10 @@ function designPrompt(role, originalPrompt, leadReply) {
   return `Chuẩn bị đầu vào bắt buộc cho dự án này với vai trò ${role}.\nYêu cầu gốc: ${originalPrompt}\nTóm tắt từ Lead: ${leadReply}\n\nPhạm vi chuyên môn: ${focus}\nNếu phần việc không áp dụng, phải nói rõ lý do và nêu rủi ro đã kiểm tra; không được tạo ý kiến chung chung. Đưa ra quyết định riêng, giả định, trade-off và tiêu chí kiểm chứng để Developer dùng được. Không tự viết code và không giao tiếp thêm agent.`;
 }
 
+function implementationPrompt(taskId, originalPrompt, planRows) {
+  return `Triển khai dự án theo kế hoạch đã được người dùng duyệt.\n\nYêu cầu gốc: ${originalPrompt}\n\nKế hoạch và các ý kiến độc lập:\n${workflowReport(planRows)}\n\nHợp nhất các quyết định, chỉ chọn giải pháp có lý do và ghi rõ phần không áp dụng. Tạo hoặc sửa project trong workspace, nếu là web project thì giữ manifest enthstudio.project.json có taskId ${taskId}; chạy kiểm tra phù hợp và báo cáo file đã đổi cùng bằng chứng.`;
+}
+
 async function claimJob() {
   const client = await pool.connect();
   try {
@@ -269,6 +273,7 @@ async function finishJob(job, answer, threadId, timings) {
     let next = null;
     const pipelineJobs = [];
     const pipelineMessages = [];
+    let awaitingPlanReview = false;
     const reports = async stages => (await client.query(`SELECT a.name,j.result FROM jobs j JOIN agents a ON a.id=j.agent_id
       WHERE j.task_id=$1 AND j.id = ANY($3::bigint[]) AND j.workflow_stage = ANY($2::text[]) AND j.status='completed' ORDER BY j.id`, [job.task_id, stages, pipelineScope])).rows;
     const original = async () => (await client.query('SELECT prompt FROM jobs WHERE id=$1', [rootId])).rows[0]?.prompt || job.prompt;
@@ -296,14 +301,17 @@ async function finishJob(job, answer, threadId, timings) {
         const designRows = await reports(['design']);
         designRows.push({ name: job.agent_id, result: answer.reply });
         pipelineJobs.push({
-          agent: 'developer',
-          prompt: `Triển khai dự án theo yêu cầu gốc và đặc tả đã được chuẩn bị.\n\nYêu cầu gốc: ${await original()}\n\nĐặc tả thiết kế và kiến trúc độc lập:\n${workflowReport(designRows)}\n\nHợp nhất các quyết định, chỉ chọn giải pháp có lý do và ghi rõ phần không áp dụng. Tạo hoặc sửa project trong workspace, nếu là web project thì giữ manifest enthstudio.project.json có taskId ${job.task_id}; chạy kiểm tra phù hợp và báo cáo file đã đổi cùng bằng chứng.`,
+          agent: 'lead',
+          prompt: `Hợp nhất plan trước khi triển khai dự án.\n\nYêu cầu gốc: ${await original()}\n\nÝ kiến độc lập của Designer, Architect và Art / UX:\n${workflowReport(designRows)}\n\nViết một kế hoạch triển khai rõ ràng cho người dùng review trước khi Developer làm: phạm vi, quyết định gameplay/sản phẩm, kiến trúc và dữ liệu, UI/UX, file/module dự kiến, tiêu chí nghiệm thu, rủi ro và trade-off. Không viết code, không tự giao Developer và phải kết thúc bằng trạng thái chờ người dùng duyệt plan.`,
           returnChain: [],
           handoffCount: 0,
-          workflowStage: 'implementation'
+          workflowStage: 'plan_review'
         });
-        pipelineMessages.push('Đã đủ đặc tả Designer, Architect và Art / UX; giao Developer triển khai.');
+        pipelineMessages.push('Đã đủ ý kiến Designer, Architect và Art / UX; giao Lead hợp nhất plan. Sau đó task sẽ chờ bạn review trước khi Developer triển khai.');
       }
+    } else if (stage === 'plan_review') {
+      awaitingPlanReview = true;
+      pipelineMessages.push('Lead đã hợp nhất plan. Task đang chờ bạn review: gửi `@lead duyệt plan` để triển khai hoặc `@lead sửa plan: ...` để yêu cầu chỉnh sửa.');
     } else if (stage === 'implementation') {
       const reviewerExists = (await client.query("SELECT 1 FROM jobs WHERE task_id=$1 AND workflow_stage='review' AND id=ANY($2::bigint[])", [job.task_id, pipelineScope])).rowCount > 0;
       if (!reviewerExists) {
@@ -401,7 +409,9 @@ async function finishJob(job, answer, threadId, timings) {
       await client.query(`INSERT INTO messages(channel_id,task_id,author,kind,body) VALUES($1,$2,'enthstudio','system',$3)`, [job.channel_id, job.task_id, message]);
     }
     const waiting = (await client.query("SELECT 1 FROM jobs WHERE task_id=$1 AND status IN ('queued','running','cancelling') LIMIT 1", [job.task_id])).rowCount > 0;
-    await client.query('UPDATE tasks SET status=$1,updated_at=now() WHERE id=$2', [scheduled.length || waiting ? 'queued' : 'completed', job.task_id]);
+    await client.query(`UPDATE tasks SET status=$1,
+      plan_status=CASE WHEN $3 THEN 'awaiting_review' ELSE plan_status END,
+      updated_at=now() WHERE id=$2`, [awaitingPlanReview ? 'awaiting_review' : (scheduled.length || waiting ? 'queued' : 'completed'), job.task_id, awaitingPlanReview]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
