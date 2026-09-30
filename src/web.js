@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { initDb, pool, all, one } from './db.js';
 import { DEFAULT_WORKFLOW_POLICY, isSeriousProjectRequest } from './workflow-policy.js';
+import { planDecision } from './plan-decision.js';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -22,14 +23,6 @@ const channelProjections = Object.freeze({
   qa: "m.agent_id = 'reviewer'",
   decisions: "m.agent_id = 'lead' OR m.vote <> 'none'"
 });
-
-function planDecision(text) {
-  const value = String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
-  if (/(?:duyet|approve|dong y|chap nhan|bat dau trien khai|trien khai)\s*(?:plan|ke hoach)?$/.test(value)
-    || /(?:duyet|approve)\s+(?:plan|ke hoach)/.test(value)) return 'approve';
-  if (/(?:sua|chinh|request changes|can sua|chua duyet|feedback).*(?:plan|ke hoach)|(?:plan|ke hoach).*(?:sua|chinh)/.test(value)) return 'changes';
-  return null;
-}
 
 function planReport(rows) {
   return rows.map(row => `### ${row.name}\n${String(row.result || 'Chưa có báo cáo').slice(0, 4500)}`).join('\n\n');
@@ -390,7 +383,9 @@ async function api(req, res, url) {
       await client.query('BEGIN');
       const exists = await client.query('SELECT id FROM channels WHERE id=$1', [channel]);
       if (!exists.rowCount) throw new Error('Kênh không tồn tại');
-      let existingTask = taskId ? (await client.query('SELECT * FROM tasks WHERE id=$1 AND channel_id=$2 FOR UPDATE', [taskId, channel])).rows[0] : null;
+      // Tasks opened through a role projection still belong to their original
+      // channel. Resolve by ID and use the task's canonical channel below.
+      let existingTask = taskId ? (await client.query('SELECT * FROM tasks WHERE id=$1 FOR UPDATE', [taskId])).rows[0] : null;
       if (!existingTask && planChoice) {
         const candidates = taskHint
           ? (await client.query("SELECT * FROM tasks WHERE id=$1 AND plan_status='awaiting_review' FOR UPDATE", [taskHint])).rows
@@ -398,7 +393,7 @@ async function api(req, res, url) {
         if (candidates.length > 1) throw new Error('Có nhiều task đang chờ duyệt plan; hãy nêu rõ task #.');
         existingTask = candidates[0] || null;
       }
-      if (taskId && !existingTask) throw new Error('Task không tồn tại trong kênh này');
+      if (taskId && !existingTask) throw new Error('Task không tồn tại');
       const decision = existingTask ? planChoice : null;
       if (planChoice && !existingTask) throw new Error('Không tìm thấy task đang chờ duyệt plan; hãy nêu rõ task #.');
       if (decision && existingTask.plan_status !== 'awaiting_review') throw new Error('Task hiện không ở bước chờ duyệt plan');

@@ -269,9 +269,9 @@ function renderChat() {
     gate.append(element('p', '', 'Đọc ý kiến Designer, Architect và Art / UX ở các kênh chuyên môn hoặc ngay trong task này. Developer chưa được giao cho tới khi bạn duyệt plan.'));
     const actions = element('div', 'plan-review-actions');
     const approve = element('button', 'small-button', 'Duyệt plan và triển khai');
-    approve.addEventListener('click', () => { input.value = '@lead duyệt plan'; input.focus(); });
+    approve.addEventListener('click', () => { input.value = `task #${task.id} @lead duyệt plan`; input.focus(); });
     const changes = element('button', 'small-button secondary', 'Yêu cầu sửa plan');
-    changes.addEventListener('click', () => { input.value = '@lead sửa plan: '; input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+    changes.addEventListener('click', () => { input.value = `task #${task.id} @lead sửa plan: `; input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
     actions.append(approve, changes); gate.append(actions); wrap.append(gate);
   }
   if (!state.messages.length) wrap.append(element('div', 'empty-chat', 'Chưa có tin nhắn. Bắt đầu bằng một yêu cầu hoặc gọi trực tiếp một agent.'));
